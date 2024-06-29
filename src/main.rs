@@ -1,7 +1,7 @@
 #![warn(clippy::all, clippy::cargo)]
 #![doc = include_str!("../README.md")]
 
-use std::{borrow, cmp, collections, fmt, fs, path};
+use std::{borrow, cmp, collections, fmt, fs, path, process};
 
 #[derive(Debug, clap::Parser)]
 #[command(bin_name = "cargo", styles = clap_cargo::style::CLAP_STYLING, subcommand_required = true)]
@@ -117,12 +117,20 @@ struct Context<'a> {
     in_scope_packages: collections::HashSet<&'a str>,
 }
 
-fn main() -> anyhow::Result<()> {
+fn main() {
     tracing_subscriber::fmt::init();
     let command: Command = clap::Parser::parse();
 
     match command {
-        Command::FeatureAspect(args) => run_feature_aspect(&args),
+        Command::FeatureAspect(args) => {
+            if let Err(e) = run_feature_aspect(&args) {
+                tracing::error!("fatal error: {}", e);
+                for reason in e.chain().skip(1) {
+                    tracing::error!("  {}", reason);
+                }
+                process::exit(1);
+            }
+        },
     }
 }
 
