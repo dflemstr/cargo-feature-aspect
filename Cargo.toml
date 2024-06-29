@@ -1,6 +1,6 @@
 [package]
 name = "cargo-feature-aspect"
-version = "0.1.4"
+version = "0.1.5"
 description = "A Cargo plugin that creates and updates feature aspects across a Cargo workspace."
 authors = ["David Flemström <david.flemstrom@gmail.com>"]
 license = "Apache-2.0 OR MIT"
