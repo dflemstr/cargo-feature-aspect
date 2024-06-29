@@ -1,0 +1,29 @@
+[package]
+name = "cargo-feature-aspect"
+version = "0.1.0"
+description = "A Cargo plugin that creates and updates aspect features across a Cargo workspace."
+authors = ["David Flemström <david.flemstrom@gmail.com>"]
+license = "Apache-2.0 OR MIT"
+categories = [
+    "development-tools",
+    "development-tools::cargo-plugins",
+]
+keywords = [
+    "cargo",
+    "cargo-subcommand",
+    "cli",
+    "feature",
+    "crates",
+]
+repository = "https://github.com/dflemstr/cargo-feature-aspect"
+documentation = "https://docs.rs/cargo-feature-aspect"
+edition = "2021"
+
+[dependencies]
+anyhow = { version = "1.0.86", features = ["backtrace"] }
+cargo_metadata = "0.18.1"
+clap = "4.5.8"
+clap-cargo = "0.14.0"
+toml = "0.8.14"
+toml_edit = "0.22.14"
+topo_sort = "0.4.0"
