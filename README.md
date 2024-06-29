@@ -14,9 +14,9 @@ of its dependees.
 
 For example, if a hypothetical `logging` crate has a `enable-tracing` feature, all crates
 that depend on `logging` might want to have their own `enable-tracing` feature, that enables
-additional tracing stuff in the local crate, and also enables the `logging` feature on all
-dependency crates.  In other words, we want to have the crates that depend directly on `logging`
-to have a feature like so:
+additional tracing stuff in the local crate, and also enables the `enable-tracing` feature on
+all dependency crates.  In other words, we want to have the crates that depend directly on
+`logging` to have a feature like so:
 
 ```
 [package]

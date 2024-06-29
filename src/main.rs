@@ -17,8 +17,8 @@ enum Command {
 ///
 /// For example, if a hypothetical `logging` crate has a `enable-tracing` feature, all crates
 /// that depend on `logging` might want to have their own `enable-tracing` feature, that enables
-/// additional tracing stuff in the local crate, and also enables the `logging` feature on all
-/// dependency crates.
+/// additional tracing stuff in the local crate, and also enables the `enable-tracing` feature on
+/// all dependency crates.
 ///
 /// This command creates and updates such a feature aspect across the crate graph.
 ///
