@@ -22,29 +22,8 @@ enum Command {
 ///
 /// This command creates and updates such a feature aspect across the crate graph.
 ///
-/// Example usages:
-///
-/// ```shell
-/// # Any crate that indirectly depends on the `logging` crate should have a feature
-/// # `enable-tracing` that is propagated through all dependency crates.
-/// cargo feature-aspect --name enable-tracing --leaf-feature logging/enable-tracing
-///
-/// # Same as above, but `--name` is inferred from `--leaf-feature`.
-/// cargo feature-aspect --leaf-feature logging/enable-tracing
-///
-/// # Any such crate should also enable the `logging` optional dependency.
-/// cargo feature-aspect --leaf-feature logging/enable-tracing --add-feature-param dep:logging
-///
-/// # Do not re-order the `enable-tracing` feature param array when it is not already in
-/// # alphabetical order.
-/// cargo feature-aspect --leaf-feature logging/enable-tracing --no-sort
-///
-/// # Dry-run to see what changes would be made
-/// cargo feature-aspect --leaf-feature logging/enable-tracing --dry-run
-///
-/// # Verify that the feature aspect is up-to-date (useful for CI)
-/// cargo feature-aspect --leaf-feature logging/enable-tracing --verify
-/// ```
+/// See the documentation in the repository for more usage examples:
+/// https://github.com/dflemstr/cargo-feature-aspect
 #[derive(Debug, clap::Args)]
 struct FeatureAspectArgs {
     /// The name of the resulting feature aspect.
