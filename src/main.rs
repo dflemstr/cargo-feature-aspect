@@ -130,7 +130,7 @@ fn main() {
                 }
                 process::exit(1);
             }
-        },
+        }
     }
 }
 
@@ -408,7 +408,11 @@ fn visit_aspect_feature(
             .as_array_mut()
             .ok_or_else(|| anyhow::anyhow!("failed to edit manifest for package `{}`: `features.{}` exists but is not an array!", package.name, feature))?;
 
-        params_to_add.retain(|param| !feature_arr.iter().any(|p| p.as_str() == Some(param.as_ref())));
+        params_to_add.retain(|param| {
+            !feature_arr
+                .iter()
+                .any(|p| p.as_str() == Some(param.as_ref()))
+        });
 
         let mut param_indices_to_remove = Vec::new();
         for param in params_to_remove {
