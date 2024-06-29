@@ -374,9 +374,6 @@ fn visit_aspect_feature(
         let mut doc: toml_edit::DocumentMut = contents.parse()?;
         // Not in dry-run/verify mode, let's make the changes
         tracing::debug!(manifest_path=?package.manifest_path, "editing manifest file");
-        if pkg_name == "cyw43-pio" {
-            println!("break");
-        }
 
         let features = doc.entry("features")
             .or_insert_with(|| toml_edit::Item::Table(toml_edit::Table::new()))
