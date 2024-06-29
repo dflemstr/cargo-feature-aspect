@@ -1,6 +1,6 @@
 # `cargo feature-aspect`
 
-A Cargo plugin that creates and updates aspect features across a Cargo workspace.
+A Cargo plugin that creates and updates feature aspects across a Cargo workspace.
 
 ## Installation
 
@@ -8,7 +8,7 @@ Simply install using `cargo` with `cargo install cargo-feature-aspect`.
 
 ## Details
 
-An aspect feature is a feature that should generally exist for all crates in a workspace
+A feature aspect is a feature that should generally exist for all crates in a workspace
 that depend on some shared crate.  This shared crate's feature will be propagated to all
 of its dependees.
 
@@ -43,7 +43,7 @@ foo = "..."
 enable-tracing = ["foo/enable-tracing"]
 ```
 
-This command creates and updates such an aspect feature across the crate graph.
+This command creates and updates such a feature aspect across the crate graph.
 
 Example usages:
 
@@ -65,6 +65,6 @@ cargo feature-aspect --leaf-feature logging/enable-tracing --no-sort
 # Dry-run to see what changes would be made
 cargo feature-aspect --leaf-feature logging/enable-tracing --dry-run
 
-# Verify that the aspect feature is up-to-date (useful for CI)
+# Verify that the feature aspect is up-to-date (useful for CI)
 cargo feature-aspect --leaf-feature logging/enable-tracing --verify
 ```

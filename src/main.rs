@@ -9,9 +9,9 @@ enum Command {
     FeatureAspect(FeatureAspectArgs),
 }
 
-/// Creates and updates aspect features in a workspace.
+/// Creates and updates feature aspects in a workspace.
 ///
-/// An aspect feature is a feature that should generally exist for all crates in a workspace
+/// A feature aspect is a feature that should generally exist for all crates in a workspace
 /// that depend on some shared crate.  This shared crate's feature will be propagated to all
 /// of its dependees.
 ///
@@ -20,7 +20,7 @@ enum Command {
 /// additional tracing stuff in the local crate, and also enables the `logging` feature on all
 /// dependency crates.
 ///
-/// This command creates and updates such an aspect feature across the crate graph.
+/// This command creates and updates such a feature aspect across the crate graph.
 ///
 /// Example usages:
 ///
@@ -42,12 +42,12 @@ enum Command {
 /// # Dry-run to see what changes would be made
 /// cargo feature-aspect --leaf-feature logging/enable-tracing --dry-run
 ///
-/// # Verify that the aspect feature is up-to-date (useful for CI)
+/// # Verify that the feature aspect is up-to-date (useful for CI)
 /// cargo feature-aspect --leaf-feature logging/enable-tracing --verify
 /// ```
 #[derive(Debug, clap::Args)]
 struct FeatureAspectArgs {
-    /// The name of the resulting aspect feature.
+    /// The name of the resulting feature aspect.
     ///
     /// This will be inferred from the name of the leaf feature if there's only one, but it might
     /// be useful to specify this flag if there are multiple leaf features.
@@ -265,7 +265,7 @@ fn visit_package<'a>(
     }
 
     if is_in_scope {
-        tracing::debug!("package considered in scope for aspect feature; ensuring feature exists");
+        tracing::debug!("package considered in scope for feature aspect; ensuring feature exists");
         ctx.in_scope_packages.insert(pkg_name);
 
         // Unfortunately at this point we cannot trust the `package.features` for diffing, because
