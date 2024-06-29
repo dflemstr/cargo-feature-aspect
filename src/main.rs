@@ -1,7 +1,7 @@
 #![warn(clippy::all, clippy::cargo)]
 #![doc = include_str!("../README.md")]
 
-use std::{borrow, collections, fmt, fs, path};
+use std::{borrow, cmp, collections, fmt, fs, path};
 
 #[derive(Debug, clap::Parser)]
 #[command(bin_name = "cargo", styles = clap_cargo::style::CLAP_STYLING, subcommand_required = true)]
@@ -236,7 +236,7 @@ fn visit_package<'a>(
 ) -> anyhow::Result<()> {
     let pkg_name = &package.name;
     let mut is_in_scope = false;
-    let mut extra_leaf_features = Vec::new();
+    let mut referenced_leaf_features = Vec::new();
 
     for feature in package.features.keys() {
         if ctx.unqualified_leaf_features.contains(&feature.as_str())
@@ -244,7 +244,13 @@ fn visit_package<'a>(
         {
             tracing::debug!("package has leaf feature");
             is_in_scope = true;
-            extra_leaf_features.push(feature.as_str());
+
+            if ctx.feature_name.as_ref() != feature.as_str() {
+                // It might be the case that our main feature is named something totally different
+                // from the leaf feature, which means that we should add the leaf feature as a
+                // dependency for our main feature.
+                referenced_leaf_features.push(feature.as_str());
+            }
         }
     }
 
@@ -262,14 +268,10 @@ fn visit_package<'a>(
         tracing::debug!("package considered in scope for aspect feature; ensuring feature exists");
         ctx.in_scope_packages.insert(pkg_name);
 
-        if let Some(params) = package.features.get(ctx.feature_name.as_ref()) {
-            let params = params.iter().map(String::as_str).collect::<Vec<_>>();
-            tracing::debug!("feature already exists; will modify");
-            visit_aspect_feature(package, ctx, &params, &extra_leaf_features)?;
-        } else {
-            tracing::debug!("feature already exists; will create from scratch");
-            visit_aspect_feature(package, ctx, &[], &extra_leaf_features)?;
-        }
+        // Unfortunately at this point we cannot trust the `package.features` for diffing, because
+        // some of the metadata features might be implicitly generated.  We will instead need to
+        // check against the actual manifest file no matter what.
+        visit_aspect_feature(package, ctx, &referenced_leaf_features)?;
     }
 
     Ok(())
@@ -278,15 +280,15 @@ fn visit_package<'a>(
 fn visit_aspect_feature(
     package: &cargo_metadata::Package,
     ctx: &mut Context,
-    feature_params: &[&str],
-    extra_leaf_features: &[&str],
+    referenced_leaf_features: &[&str],
 ) -> anyhow::Result<()> {
     let pkg_name = &package.name;
     let feature = &ctx.feature_name;
 
-    // This is our feature, let's edit it.
+    // Params to possibly add, however a check will be made later to remove duplicates
     let mut params_to_add: Vec<borrow::Cow<str>> = Vec::new();
-    let mut param_indices_to_remove = Vec::new();
+    // Params to remove, however a check will be made later to see if they actually exist
+    let mut params_to_remove: Vec<borrow::Cow<str>> = Vec::new();
 
     // Here we do lots of `Vec::contains` but since these are small vecs, it is not worth it
     // to do some fancy hash set stuff, since hasing all the strings will probably take more
@@ -306,12 +308,8 @@ fn visit_aspect_feature(
                 (non_optional_dep_spec, optional_dep_spec)
             };
 
-            if !feature_params.contains(&dep_spec_to_add.as_str()) {
-                params_to_add.push(dep_spec_to_add.into());
-            }
-            if let Some(idx) = feature_params.iter().position(|p| p == &dep_spec_to_remove) {
-                param_indices_to_remove.push(idx);
-            }
+            params_to_add.push(dep_spec_to_add.into());
+            params_to_remove.push(dep_spec_to_remove.into());
         }
     }
 
@@ -320,68 +318,141 @@ fn visit_aspect_feature(
         .extra_feature_params
         .as_slice()
         .iter()
-        .chain(extra_leaf_features.iter())
+        .chain(referenced_leaf_features.iter())
     {
-        if !feature_params.contains(&param) && !params_to_add.iter().any(|s| s == param) {
+        let should_include = if let Some((prefix, suffix)) = param.split_once(':') {
+            if prefix == "dep" {
+                // Special-case: we only include dep references if the dep actually exists.
+                // This would otherwise be very annoying to express with some sort of CLI flags,
+                // so we just handle it by default.
+                package.dependencies.iter().any(|d| d.name == suffix)
+            } else {
+                true
+            }
+        } else {
+            true
+        };
+
+        if should_include {
             params_to_add.push(param.into());
         }
     }
 
+    // TODO: is it clean to just make the file change here? Feels a bit dirty/hidden away...
+    let contents = fs::read_to_string(&package.manifest_path)?;
+
     if ctx.dry_run || ctx.verify {
+        // We need to parse the actual manifest file to remove implicit features that get
+        // auto-generated by cargo at runtime
+        let doc: toml::Table = toml::from_str(&contents)?;
+
+        let current_params = doc
+            // [features]
+            // ...
+            .get("features")
+            // [features]
+            // my-feature = ...
+            .and_then(|f| f.get(feature.as_ref()))
+            // [features]
+            // my-feature = [...]
+            .and_then(|f| f.as_array())
+            // [features]
+            // my-feature = ["..."]
+            .map(|values| values.iter().flat_map(|v| v.as_str()).collect::<Vec<_>>())
+            .unwrap_or_default();
+
+        params_to_add.retain(|p| !current_params.contains(&p.as_ref()));
+        params_to_remove.retain(|p| current_params.contains(&p.as_ref()));
+
         // Describe changes that would be made
         if !params_to_add.is_empty() {
             for param in &params_to_add {
                 tracing::info!(?feature, ?param, "would add param");
                 ctx.has_changes = true;
             }
-        }
-        if !params_to_add.is_empty() {
             eprintln!(
                 "  package `{pkg_name}` feature `{feature}`: would add `{:?}` to the feature array",
                 params_to_add.as_slice()
             );
         }
 
-        if !param_indices_to_remove.is_empty() {
-            for &idx in &param_indices_to_remove {
-                let param = &feature_params[idx];
+        if !params_to_remove.is_empty() {
+            for param in &params_to_remove {
                 tracing::info!(?feature, ?param, "would remove param");
                 ctx.has_changes = true;
             }
-        }
-        if !param_indices_to_remove.is_empty() {
-            eprintln!("  package `{pkg_name}` feature `{feature}`: would remove `{:?}` from the feature array", param_indices_to_remove.iter().copied().map(|i| feature_params[i]).collect::<Vec<_>>());
+            eprintln!("  package `{pkg_name}` feature `{feature}`: would remove `{:?}` from the feature array", params_to_remove.as_slice());
         }
     } else {
-        // Not in dry-run/verify mode, let's make the changes
-
-        // TODO: is it clean to just make the file change here? Feels a bit dirty/hidden away...
-        let contents = fs::read_to_string(&package.manifest_path)?;
         let mut doc: toml_edit::DocumentMut = contents.parse()?;
-
-        let features = doc.entry("features").or_insert_with(|| toml_edit::Item::Table(toml_edit::Table::new())).as_table_mut().ok_or_else(||anyhow::anyhow!("failed to edit manifest for package `{}`: the `features` field exists but is not a table!", package.name))?;
-        let feature_arr = features.entry(feature.as_ref()).or_insert_with(|| toml_edit::Item::Value(toml_edit::Value::Array(toml_edit::Array::new())))
-            .as_array_mut().ok_or_else(|| anyhow::anyhow!("failed to edit manifest for package `{}`: `features.{}` exists but is not an array!", package.name, feature))?;
-
-        // Reverse sort indices to make it safe to remove them one by one from a Vec
-        param_indices_to_remove.sort_by(|a, b| b.cmp(a));
-
-        // If sorting the existing array is disabled, at least sort the new stuff we're adding
-        if !ctx.sort {
-            params_to_add.sort();
+        // Not in dry-run/verify mode, let's make the changes
+        tracing::debug!(manifest_path=?package.manifest_path, "editing manifest file");
+        if pkg_name == "cyw43-pio" {
+            println!("break");
         }
+
+        let features = doc.entry("features")
+            .or_insert_with(|| toml_edit::Item::Table(toml_edit::Table::new()))
+            .as_table_mut()
+            .ok_or_else(|| anyhow::anyhow!("failed to edit manifest for package `{}`: the `features` field exists but is not a table!", package.name))?;
+        let feature_arr = features.entry(feature.as_ref())
+            .or_insert_with(|| toml_edit::Item::Value(toml_edit::Value::Array(toml_edit::Array::new())))
+            .as_array_mut()
+            .ok_or_else(|| anyhow::anyhow!("failed to edit manifest for package `{}`: `features.{}` exists but is not an array!", package.name, feature))?;
+
+        params_to_add.retain(|param| !feature_arr.iter().any(|p| p.as_str() == Some(param.as_ref())));
+
+        let mut param_indices_to_remove = Vec::new();
+        for param in params_to_remove {
+            if let Some(idx) = feature_arr
+                .iter()
+                .position(|p| p.as_str() == Some(param.as_ref()))
+            {
+                param_indices_to_remove.push(idx);
+            }
+        }
+
+        // Reverse sort indices to make it safe to remove them one by one from the array without
+        // invalidating later indices
+        param_indices_to_remove.sort_by(|a, b| b.cmp(a));
 
         for idx in param_indices_to_remove {
             feature_arr.remove(idx);
         }
 
+        // Awkward sorting functions because `.sort_by_key()` doesn't handle sort keys with
+        // lifetimes nicely
+        fn sort_key(param: &str) -> (bool, &str) {
+            if param.starts_with("dep:") {
+                (false, param)
+            } else {
+                (true, param)
+            }
+        }
+
+        fn sort_ord(a: &str, b: &str) -> cmp::Ordering {
+            sort_key(a).cmp(&sort_key(b))
+        }
+
+        // If sorting the existing array is disabled, at least sort the new stuff we're adding.
+        // We don't need to do this if we're going to be sorting the TOML array later anyway.
+        if !ctx.sort {
+            params_to_add.sort_by(|a, b| sort_ord(a.as_ref(), b.as_ref()));
+        }
+
         for param in params_to_add {
-            feature_arr.push(param.as_ref());
+            feature_arr.push_formatted(toml_edit::Value::String(toml_edit::Formatted::new(
+                param.into_owned(),
+            )));
         }
 
         if ctx.sort {
-            feature_arr.sort_by_key(|v| v.as_str().map(ToOwned::to_owned));
+            feature_arr
+                .sort_by(|a, b| sort_ord(a.as_str().unwrap_or(""), b.as_str().unwrap_or("")));
+            feature_arr.fmt();
         }
+
+        fs::write(&package.manifest_path, doc.to_string())?;
     }
 
     Ok(())
