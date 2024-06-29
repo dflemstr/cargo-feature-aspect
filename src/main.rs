@@ -1,8 +1,7 @@
 #![warn(clippy::all, clippy::cargo)]
 #![doc = include_str!("../README.md")]
 
-use std::path;
-use std::{borrow, collections, fs};
+use std::{borrow, collections, fmt, fs, path};
 
 #[derive(Debug, clap::Parser)]
 #[command(bin_name = "cargo", styles = clap_cargo::style::CLAP_STYLING, subcommand_required = true)]
@@ -119,6 +118,7 @@ struct Context<'a> {
 }
 
 fn main() -> anyhow::Result<()> {
+    tracing_subscriber::fmt::init();
     let command: Command = clap::Parser::parse();
 
     match command {
@@ -127,9 +127,12 @@ fn main() -> anyhow::Result<()> {
 }
 
 fn run_feature_aspect(args: &FeatureAspectArgs) -> anyhow::Result<()> {
+    tracing::debug!("resolving workspace metadata");
     let metadata = resolve_ws(args.manifest_path.as_deref(), args.locked, args.offline)?;
+    tracing::debug!("enumerating workspace members");
     let mut packages = find_ws_members(metadata);
-    reverse_topo_sort(&mut packages)?;
+    tracing::debug!("doing topological sort of workspace members");
+    topo_sort_packages(&mut packages)?;
 
     let mut ctx = create_context(args)?;
     for package in &packages {
@@ -198,12 +201,10 @@ fn create_context(args: &FeatureAspectArgs) -> anyhow::Result<Context> {
     Ok(context)
 }
 
-fn reverse_topo_sort(packages: &mut [cargo_metadata::Package]) -> anyhow::Result<()> {
+fn topo_sort_packages(packages: &mut [cargo_metadata::Package]) -> anyhow::Result<()> {
     const DEP_CYCLE_ERR: &str = "Dependency cycle detected! Resolve this using other cargo commands first (e.g. `cargo build` should fail with a decent error message).";
 
-    let packages_len = packages.len();
-
-    let mut topo = topo_sort::TopoSort::with_capacity(packages.len());
+    let mut topo = topo_sort::TopoSort::<&str>::with_capacity(packages.len());
     for package in packages.iter() {
         topo.insert(
             package.name.as_str(),
@@ -211,20 +212,24 @@ fn reverse_topo_sort(packages: &mut [cargo_metadata::Package]) -> anyhow::Result
         );
     }
 
+    tracing::debug!(nodes=?TopoNodes(topo.to_vec()), "topo sorted nodes");
+
     // Contains a mapping of package name to topological sort index
     let order: collections::HashMap<String, usize> = topo
         .nodes()
         .enumerate()
-        // Sort in reverse order with `packages_len - idx` so that dependencies are before dependees
-        .map(|(idx, node_result)| Ok(((*node_result?).to_string(), packages_len - idx)))
+        .map(|(idx, node_result)| Ok(((*node_result?).to_string(), idx)))
         .collect::<anyhow::Result<_>>()
         .map_err(|_| anyhow::anyhow!(DEP_CYCLE_ERR))?;
 
     packages.sort_by_key(|p| order[p.name.as_str()]);
 
+    tracing::debug!(packages=?(packages.iter().map(|p| p.name.as_str()).collect::<Vec<_>>()), "topo sorted package order");
+
     Ok(())
 }
 
+#[tracing::instrument(skip_all, fields(package = package.name))]
 fn visit_package<'a>(
     package: &'a cargo_metadata::Package,
     ctx: &mut Context<'a>,
@@ -237,6 +242,7 @@ fn visit_package<'a>(
         if ctx.unqualified_leaf_features.contains(&feature.as_str())
             || ctx.qualified_leaf_features.contains(&(pkg_name, feature))
         {
+            tracing::debug!("package has leaf feature");
             is_in_scope = true;
             extra_leaf_features.push(feature.as_str());
         }
@@ -244,17 +250,24 @@ fn visit_package<'a>(
 
     for dependency in &package.dependencies {
         if ctx.in_scope_packages.contains(dependency.name.as_str()) {
+            tracing::debug!(
+                dependency = dependency.name,
+                "package depends on in-scope dependency"
+            );
             is_in_scope = true;
         }
     }
 
     if is_in_scope {
+        tracing::debug!("package considered in scope for aspect feature; ensuring feature exists");
         ctx.in_scope_packages.insert(pkg_name);
 
         if let Some(params) = package.features.get(ctx.feature_name.as_ref()) {
             let params = params.iter().map(String::as_str).collect::<Vec<_>>();
+            tracing::debug!("feature already exists; will modify");
             visit_aspect_feature(package, ctx, &params, &extra_leaf_features)?;
         } else {
+            tracing::debug!("feature already exists; will create from scratch");
             visit_aspect_feature(package, ctx, &[], &extra_leaf_features)?;
         }
     }
@@ -317,17 +330,27 @@ fn visit_aspect_feature(
     if ctx.dry_run || ctx.verify {
         // Describe changes that would be made
         if !params_to_add.is_empty() {
-            for param in params_to_add {
-                eprintln!("package `{pkg_name}` feature `{feature}`: would add `{param}`");
+            for param in &params_to_add {
+                tracing::info!(?feature, ?param, "would add param");
+                ctx.has_changes = true;
+            }
+        }
+        if !params_to_add.is_empty() {
+            eprintln!(
+                "  package `{pkg_name}` feature `{feature}`: would add `{:?}` to the feature array",
+                params_to_add.as_slice()
+            );
+        }
+
+        if !param_indices_to_remove.is_empty() {
+            for &idx in &param_indices_to_remove {
+                let param = &feature_params[idx];
+                tracing::info!(?feature, ?param, "would remove param");
                 ctx.has_changes = true;
             }
         }
         if !param_indices_to_remove.is_empty() {
-            for idx in param_indices_to_remove {
-                let param = &feature_params[idx];
-                eprintln!("package `{pkg_name}` feature `{feature}`: would remove `{param}`");
-                ctx.has_changes = true;
-            }
+            eprintln!("  package `{pkg_name}` feature `{feature}`: would remove `{:?}` from the feature array", param_indices_to_remove.iter().copied().map(|i| feature_params[i]).collect::<Vec<_>>());
         }
     } else {
         // Not in dry-run/verify mode, let's make the changes
@@ -396,6 +419,29 @@ fn find_ws_members(ws: cargo_metadata::Metadata) -> Vec<cargo_metadata::Package>
         .into_iter()
         .filter(|p| workspace_members.contains(&p.id))
         .collect()
+}
+
+struct TopoNodes<'a, V>(topo_sort::SortResults<(&'a V, &'a collections::HashSet<V>)>);
+
+impl<'a, V> fmt::Debug for TopoNodes<'a, V>
+where
+    V: fmt::Debug,
+{
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let items = match self.0 {
+            topo_sort::SortResults::Full(ref items) => {
+                f.write_str("full:")?;
+                items
+            }
+            topo_sort::SortResults::Partial(ref items) => {
+                f.write_str("partial:")?;
+                items
+            }
+        };
+        f.debug_list()
+            .entries(items.iter().map(|(v, _)| v))
+            .finish()
+    }
 }
 
 #[test]
