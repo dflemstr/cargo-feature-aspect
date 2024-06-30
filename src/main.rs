@@ -62,24 +62,14 @@ struct FeatureAspectArgs {
     #[arg(long)]
     no_sort: bool,
 
-    /// Provide the path to the `Cargo.toml` to start with.
-    ///
-    /// This arg mainly exists to maintain compatibility with the standard `cargo` flag of the same
-    /// name.
-    #[arg(long)]
-    manifest_path: Option<path::PathBuf>,
+    #[command(flatten)]
+    manifest: clap_cargo::Manifest,
 
     /// Run without accessing the network.
-    ///
-    /// This arg mainly exists to maintain compatibility with the standard `cargo` flag of the same
-    /// name.
     #[arg(long)]
     offline: bool,
 
     /// Require `Cargo.toml` to be up-to-date.
-    ///
-    /// This arg mainly exists to maintain compatibility with the standard `cargo` flag of the same
-    /// name.
     #[arg(long)]
     locked: bool,
 }
@@ -117,7 +107,11 @@ fn main() {
 
 fn run_feature_aspect(args: &FeatureAspectArgs) -> anyhow::Result<()> {
     tracing::debug!("resolving workspace metadata");
-    let metadata = resolve_ws(args.manifest_path.as_deref(), args.locked, args.offline)?;
+    let metadata = resolve_ws(
+        args.manifest.manifest_path.as_deref(),
+        args.locked,
+        args.offline,
+    )?;
     tracing::debug!("enumerating workspace members");
     let mut packages = find_ws_members(metadata);
     tracing::debug!("doing topological sort of workspace members");
