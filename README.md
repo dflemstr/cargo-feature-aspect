@@ -68,3 +68,8 @@ cargo feature-aspect --leaf-feature logging/enable-tracing --dry-run
 # Verify that the feature aspect is up-to-date (useful for CI)
 cargo feature-aspect --leaf-feature logging/enable-tracing --verify
 ```
+
+# Attribution
+
+Some code in this crate was copied from `cargo-edit` which is
+Copyright (c) 2015 Without Boats, Pascal Hertleif.

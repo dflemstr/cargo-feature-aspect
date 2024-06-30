@@ -6,6 +6,7 @@ use std::{borrow, cmp, fs, process};
 mod cli;
 mod context;
 mod metadata;
+mod output;
 mod topo;
 
 fn main() {
@@ -242,28 +243,39 @@ fn handle_feature_changes(
             .unwrap_or_default();
 
         params_to_add.retain(|p| !current_params.contains(&p.as_ref()));
-        params_to_add.sort_by(|a, b| feature_param_ordering(a.as_ref(), b.as_ref()));
         params_to_remove.retain(|p| current_params.contains(&p.as_ref()));
-        params_to_remove.sort_by(|a, b| feature_param_ordering(a.as_ref(), b.as_ref()));
 
         // Describe changes that would be made
         if !params_to_add.is_empty() {
+            params_to_add.sort_by(|a, b| feature_param_ordering(a.as_ref(), b.as_ref()));
+
             for param in &params_to_add {
                 tracing::info!(?feature, ?param, "would add param");
-                has_changes = true;
+                output::shell_status(
+                    "Would add",
+                    &format!(
+                        "{param:?} to package {pkg_name} feature {feature:?}"
+                    ),
+                )?;
             }
-            eprintln!(
-                "  package `{pkg_name}` feature `{feature}`: would add `{:?}` to the feature array",
-                params_to_add.as_slice()
-            );
+
+            has_changes = true;
         }
 
         if !params_to_remove.is_empty() {
+            params_to_remove.sort_by(|a, b| feature_param_ordering(a.as_ref(), b.as_ref()));
+
             for param in &params_to_remove {
                 tracing::info!(?feature, ?param, "would remove param");
-                has_changes = true;
+                output::shell_status(
+                    "Would remove",
+                    &format!(
+                        "{param:?} from package {pkg_name} feature {feature:?}"
+                    ),
+                )?;
             }
-            eprintln!("  package `{pkg_name}` feature `{feature}`: would remove `{:?}` from the feature array", params_to_remove.as_slice());
+
+            has_changes = true;
         }
     } else {
         let mut doc: toml_edit::DocumentMut = contents.parse()?;
@@ -285,44 +297,71 @@ fn handle_feature_changes(
                 .any(|p| p.as_str() == Some(param.as_ref()))
         });
 
+        // As opposed to the verify case, we store the indices of what to remove, to aid in making
+        // edits as non-invasive as possible. If we don't, we might lose information like comments
+        // for existing feature params. It's a bit dirty to have side-effects in `retain()`, I hope
+        // you'll forgive me.
         let mut param_indices_to_remove = Vec::new();
-        for param in params_to_remove {
+        params_to_remove.retain(|param| {
             if let Some(idx) = feature_arr
                 .iter()
                 .position(|p| p.as_str() == Some(param.as_ref()))
             {
                 param_indices_to_remove.push(idx);
+                true
+            } else {
+                false
             }
-        }
+        });
 
-        // Reverse sort indices to make it safe to remove them one by one from the array without
-        // invalidating later indices
-        param_indices_to_remove.sort_by(|a, b| b.cmp(a));
-
-        for idx in param_indices_to_remove {
-            feature_arr.remove(idx);
-        }
-
-        // If sorting the existing array is disabled, at least sort the new stuff we're adding.
-        // We don't need to do this if we're going to be sorting the TOML array later anyway.
-        if !ctx.sort {
+        if !(params_to_add.is_empty() && params_to_remove.is_empty()) {
+            // If sorting the existing array is disabled, at least sort the new stuff we're adding.
             params_to_add.sort_by(|a, b| feature_param_ordering(a.as_ref(), b.as_ref()));
-        }
+            params_to_remove.sort_by(|a, b| feature_param_ordering(a.as_ref(), b.as_ref()));
 
-        for param in params_to_add {
-            feature_arr.push_formatted(toml_edit::Value::String(toml_edit::Formatted::new(
-                param.into_owned(),
-            )));
-        }
+            for param in &params_to_add {
+                output::shell_status(
+                    "Adding",
+                    &format!(
+                        "{param:?} to package {pkg_name} feature {feature:?}"),
+                )?;
+            }
 
-        if ctx.sort {
-            feature_arr.sort_by(|a, b| {
-                feature_param_ordering(a.as_str().unwrap_or(""), b.as_str().unwrap_or(""))
-            });
-            feature_arr.fmt();
-        }
+            for param in params_to_remove {
+                output::shell_status(
+                    "Removing",
+                    &format!(
+                        "{param:?} from package {pkg_name} feature {feature:?}"
+                    ),
+                )?;
+            }
 
-        fs::write(&package.manifest_path, doc.to_string())?;
+            // Now that we have logged what we're about to do, let's edit the actual TOML
+
+            // Reverse sort indices to make it safe to remove them one by one from the array without
+            // invalidating later indices
+            param_indices_to_remove.sort_by(|a, b| b.cmp(a));
+
+            for &idx in &param_indices_to_remove {
+                // Remove in the actual TOML manifest
+                feature_arr.remove(idx);
+            }
+
+            for param in params_to_add {
+                feature_arr.push_formatted(toml_edit::Value::String(toml_edit::Formatted::new(
+                    param.into_owned(),
+                )));
+            }
+
+            if ctx.sort {
+                feature_arr.sort_by(|a, b| {
+                    feature_param_ordering(a.as_str().unwrap_or(""), b.as_str().unwrap_or(""))
+                });
+                feature_arr.fmt();
+            }
+
+            fs::write(&package.manifest_path, doc.to_string())?;
+        }
     }
 
     Ok(has_changes)
