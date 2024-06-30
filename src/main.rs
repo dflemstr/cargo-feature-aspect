@@ -98,10 +98,12 @@ struct Context<'a> {
 
 fn main() {
     tracing_subscriber::fmt::init();
-    let command: Command = clap::Parser::parse();
 
-    let result = match command {
-        Command::FeatureAspect(args) => run_feature_aspect(&args),
+    let result = {
+        let command: Command = clap::Parser::parse();
+        match command {
+            Command::FeatureAspect(args) => run_feature_aspect(&args),
+        }
     };
 
     if let Err(e) = result {
@@ -229,7 +231,7 @@ fn visit_package<'a>(
         if ctx.unqualified_leaf_features.contains(&feature.as_str())
             || ctx.qualified_leaf_features.contains(&(pkg_name, feature))
         {
-            tracing::debug!("package has leaf feature");
+            tracing::debug!(feature, "package has leaf feature");
             is_in_scope = true;
 
             if ctx.feature_name.as_ref() != feature.as_str() {
@@ -269,6 +271,20 @@ fn visit_aspect_feature(
     ctx: &mut Context,
     referenced_leaf_features: &[&str],
 ) -> anyhow::Result<()> {
+    // Awkward sorting functions because `.sort_by_key()` doesn't handle sort keys with
+    // lifetimes nicely
+    fn feature_param_sort_key(param: &str) -> (bool, &str) {
+        if param.starts_with("dep:") {
+            (false, param)
+        } else {
+            (true, param)
+        }
+    }
+
+    fn feature_param_ordering(a: &str, b: &str) -> cmp::Ordering {
+        feature_param_sort_key(a).cmp(&feature_param_sort_key(b))
+    }
+
     let pkg_name = &package.name;
     let feature = &ctx.feature_name;
 
@@ -278,7 +294,7 @@ fn visit_aspect_feature(
     let mut params_to_remove: Vec<borrow::Cow<str>> = Vec::new();
 
     // Here we do lots of `Vec::contains` but since these are small vecs, it is not worth it
-    // to do some fancy hash set stuff, since hasing all the strings will probably take more
+    // to do some fancy hash set stuff, since hashing all the strings will probably take more
     // time than just traversing the vec.
 
     // Ensure that we propagate the feature to our dependencies.
@@ -349,7 +365,9 @@ fn visit_aspect_feature(
             .unwrap_or_default();
 
         params_to_add.retain(|p| !current_params.contains(&p.as_ref()));
+        params_to_add.sort_by(|a, b| feature_param_ordering(a.as_ref(), b.as_ref()));
         params_to_remove.retain(|p| current_params.contains(&p.as_ref()));
+        params_to_remove.sort_by(|a, b| feature_param_ordering(a.as_ref(), b.as_ref()));
 
         // Describe changes that would be made
         if !params_to_add.is_empty() {
@@ -408,24 +426,10 @@ fn visit_aspect_feature(
             feature_arr.remove(idx);
         }
 
-        // Awkward sorting functions because `.sort_by_key()` doesn't handle sort keys with
-        // lifetimes nicely
-        fn sort_key(param: &str) -> (bool, &str) {
-            if param.starts_with("dep:") {
-                (false, param)
-            } else {
-                (true, param)
-            }
-        }
-
-        fn sort_ord(a: &str, b: &str) -> cmp::Ordering {
-            sort_key(a).cmp(&sort_key(b))
-        }
-
         // If sorting the existing array is disabled, at least sort the new stuff we're adding.
         // We don't need to do this if we're going to be sorting the TOML array later anyway.
         if !ctx.sort {
-            params_to_add.sort_by(|a, b| sort_ord(a.as_ref(), b.as_ref()));
+            params_to_add.sort_by(|a, b| feature_param_ordering(a.as_ref(), b.as_ref()));
         }
 
         for param in params_to_add {
@@ -435,8 +439,9 @@ fn visit_aspect_feature(
         }
 
         if ctx.sort {
-            feature_arr
-                .sort_by(|a, b| sort_ord(a.as_str().unwrap_or(""), b.as_str().unwrap_or("")));
+            feature_arr.sort_by(|a, b| {
+                feature_param_ordering(a.as_str().unwrap_or(""), b.as_str().unwrap_or(""))
+            });
             feature_arr.fmt();
         }
 
