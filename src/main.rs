@@ -100,16 +100,16 @@ fn main() {
     tracing_subscriber::fmt::init();
     let command: Command = clap::Parser::parse();
 
-    match command {
-        Command::FeatureAspect(args) => {
-            if let Err(e) = run_feature_aspect(&args) {
-                tracing::error!("fatal error: {}", e);
-                for reason in e.chain().skip(1) {
-                    tracing::error!("  {}", reason);
-                }
-                process::exit(1);
-            }
+    let result = match command {
+        Command::FeatureAspect(args) => run_feature_aspect(&args),
+    };
+
+    if let Err(e) = result {
+        tracing::error!("fatal error: {}", e);
+        for reason in e.chain().skip(1) {
+            tracing::error!("  {}", reason);
         }
+        process::exit(1);
     }
 }
 
