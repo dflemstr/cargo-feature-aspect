@@ -29,6 +29,13 @@ fn main() {
 }
 
 fn run_feature_aspect(args: &cli::FeatureAspectArgs) -> anyhow::Result<()> {
+    let mut ctx = context::Context::new(args)?;
+    let feature = ctx.feature_name.as_ref();
+    output::shell_status(
+        "Processing",
+        &format!("feature aspect for feature {feature:?} in the workspace"),
+    )?;
+
     tracing::debug!("resolving workspace metadata");
     let metadata = metadata::resolve_ws(
         args.manifest.manifest_path.as_deref(),
@@ -40,7 +47,6 @@ fn run_feature_aspect(args: &cli::FeatureAspectArgs) -> anyhow::Result<()> {
     tracing::debug!("doing topological sort of workspace members");
     topo::sort_packages(&mut packages)?;
 
-    let mut ctx = context::Context::new(args)?;
     for package in &packages {
         visit_package(package, &mut ctx)?;
     }
@@ -253,9 +259,7 @@ fn handle_feature_changes(
                 tracing::info!(?feature, ?param, "would add param");
                 output::shell_status(
                     "Would add",
-                    &format!(
-                        "{param:?} to package {pkg_name} feature {feature:?}"
-                    ),
+                    &format!("{param:?} to package {pkg_name} feature {feature:?}"),
                 )?;
             }
 
@@ -269,9 +273,7 @@ fn handle_feature_changes(
                 tracing::info!(?feature, ?param, "would remove param");
                 output::shell_status(
                     "Would remove",
-                    &format!(
-                        "{param:?} from package {pkg_name} feature {feature:?}"
-                    ),
+                    &format!("{param:?} from package {pkg_name} feature {feature:?}"),
                 )?;
             }
 
@@ -322,17 +324,14 @@ fn handle_feature_changes(
             for param in &params_to_add {
                 output::shell_status(
                     "Adding",
-                    &format!(
-                        "{param:?} to package {pkg_name} feature {feature:?}"),
+                    &format!("{param:?} to package {pkg_name} feature {feature:?}"),
                 )?;
             }
 
             for param in params_to_remove {
                 output::shell_status(
                     "Removing",
-                    &format!(
-                        "{param:?} from package {pkg_name} feature {feature:?}"
-                    ),
+                    &format!("{param:?} from package {pkg_name} feature {feature:?}"),
                 )?;
             }
 
