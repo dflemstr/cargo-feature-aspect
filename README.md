@@ -69,7 +69,7 @@ cargo feature-aspect --leaf-feature logging/enable-tracing --dry-run
 cargo feature-aspect --leaf-feature logging/enable-tracing --verify
 ```
 
-# Attribution
+## Attribution
 
 Some code in this crate was copied from `cargo-edit` which is
 Copyright (c) 2015 Without Boats, Pascal Hertleif.
